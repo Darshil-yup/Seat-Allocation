@@ -62,7 +62,7 @@ const AllocationDashboard = React.memo(({
   const [printDate, setPrintDate] = useState(format(new Date(), 'dd.MM.yyyy'));
   const [semester, setSemester] = useState<"ODD" | "EVEN">("ODD");
   const [examType, setExamType] = useState<"MSE1" | "MSE 2" | "Re-MSE">("MSE 2");
-  const [selectedPaper, setSelectedPaper] = useState<string>("all");
+  const [selectedShift, setSelectedShift] = useState<"Paper I" | "Paper II">("Paper I");
   const [isPrintDialogOpen, setIsPrintDialogOpen] = useState(false);
   const [isUnassignedOpen, setIsUnassignedOpen] = useState(false);
 
@@ -78,13 +78,6 @@ const AllocationDashboard = React.memo(({
     });
   }, [classrooms, allocation.assignments]);
 
-  const availablePapers = useMemo(() => {
-    const papers = new Set<string>();
-    allocation.assignments.forEach(assignment => {
-      papers.add(assignment.paper);
-    });
-    return Array.from(papers).sort();
-  }, [allocation.assignments]);
 
   const totalCapacity = useMemo(() => {
     return classrooms.reduce((acc, c) => acc + c.totalCapacity, 0);
@@ -305,9 +298,13 @@ const AllocationDashboard = React.memo(({
   const handlePrint = () => {
     setIsPrintDialogOpen(false);
 
-    const filteredAssignments = selectedPaper === "all" 
-      ? allocation.assignments 
-      : allocation.assignments.filter(assignment => assignment.paper === selectedPaper);
+    // Filter assignments by the selected shift (Paper I or Paper II)
+    const filteredAssignments = allocation.assignments.filter(assignment => {
+      const semNum = parseInt(assignment.assignment?.roomName || '0');
+      // Paper I: odd semesters (3, 5, 7), Paper II: even semesters (2, 4, 6)
+      const assignmentShift = (assignment.semesterSection.startsWith('2') || assignment.semesterSection.startsWith('4') || assignment.semesterSection.startsWith('6')) ? "Paper II" : "Paper I";
+      return assignmentShift === selectedShift;
+    });
 
     const classroomReports = generatePrintData(classrooms, filteredAssignments);
 
@@ -539,21 +536,23 @@ const AllocationDashboard = React.memo(({
               </div>
               <div className="grid grid-cols-4 items-center gap-4">
                 <Label className="text-right">
-                  Paper/Branch
+                  Shift
                 </Label>
-                <Select value={selectedPaper} onValueChange={setSelectedPaper}>
-                  <SelectTrigger className="col-span-3">
-                    <SelectValue placeholder="Select paper to print" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All Papers (Mixed)</SelectItem>
-                    {availablePapers.map((paper) => (
-                      <SelectItem key={paper} value={paper}>
-                        {paper} Only
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <RadioGroup
+                  defaultValue="Paper I"
+                  className="col-span-3 flex gap-4"
+                  onValueChange={(value: "Paper I" | "Paper II") => setSelectedShift(value)}
+                  value={selectedShift}
+                >
+                  <div className="flex items-center space-x-2">
+                    <RadioGroupItem value="Paper I" id="r-paper-i" />
+                    <Label htmlFor="r-paper-i">Paper I (Odd Semesters)</Label>
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <RadioGroupItem value="Paper II" id="r-paper-ii" />
+                    <Label htmlFor="r-paper-ii">Paper II (Even Semesters)</Label>
+                  </div>
+                </RadioGroup>
               </div>
               <div className="grid grid-cols-4 items-start gap-4">
                 <Label className="text-right pt-2">Semester</Label>

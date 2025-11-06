@@ -100,11 +100,32 @@ export async function intelligentSeating(input: IntelligentSeatingInput): Promis
     return arr && arr.length > 0 ? arr.shift()! : null;
   };
 
+  const allowedPairFor = (sem: string): string | null => {
+    // Pairing rule: 3<->5 and 4<->6; others: no enforced pair
+    const n = parseInt(sem, 10);
+    if (n === 3) return '5';
+    if (n === 5) return '3';
+    if (n === 4) return '6';
+    if (n === 6) return '4';
+    return null;
+  };
+
   const getTopTwoSemesters = (branch: string): string[] => {
-    return Object.keys(byBranch[branch] || {})
+    const available = Object.keys(byBranch[branch] || {})
       .filter(sem => (byBranch[branch][sem]?.length || 0) > 0)
-      .sort((a, b) => (byBranch[branch][b].length - byBranch[branch][a].length) || parseInt(a) - parseInt(b))
-      .slice(0, 2);
+      .sort((a, b) => (byBranch[branch][b].length - byBranch[branch][a].length) || parseInt(a) - parseInt(b));
+
+    if (available.length === 0) return [];
+    if (available.length === 1) return [available[0]];
+
+    // Enforce pairing rule where applicable
+    const primary = available[0];
+    const wanted = allowedPairFor(primary);
+    if (wanted && available.includes(wanted)) {
+      return [primary, wanted];
+    }
+    // Fallback: pick next with most students
+    return [primary, available[1]];
   };
 
   // 2) Sort classrooms: prefer 4-column rooms first, then 5, then others
@@ -220,8 +241,27 @@ export async function intelligentSeating(input: IntelligentSeatingInput): Promis
     const pickTopPaper = () => paperKeysLeft.filter(p => remainingCountPaper(p) > 0)
       .sort((a,b) => remainingCountPaper(b) - remainingCountPaper(a) || a.localeCompare(b))[0];
 
-    const pickOtherPaper = (not: string) => paperKeysLeft.filter(p => p !== not && remainingCountPaper(p) > 0)
-      .sort((a,b) => remainingCountPaper(b) - remainingCountPaper(a) || a.localeCompare(b))[0];
+    const pickOtherPaper = (notPaper: string, refStudent?: Student) => {
+      // If we have a reference student with semester, prefer their allowed pair semester
+      if (refStudent) {
+        const wanted = allowedPairFor(refStudent.semesterSection.split('-')[0]);
+        if (wanted) {
+          const candidates = paperKeysLeft.filter(p => {
+            if (p === notPaper) return false;
+            if (remainingCountPaper(p) === 0) return false;
+            // Extract semester from paper key format
+            const matches = byPaperLeft[p]?.some(s => s.semesterSection.split('-')[0] === wanted);
+            return !!matches;
+          });
+          if (candidates.length > 0) {
+            return candidates.sort((a, b) => remainingCountPaper(b) - remainingCountPaper(a))[0];
+          }
+        }
+      }
+      // Fallback: just pick different paper with most students
+      return paperKeysLeft.filter(p => p !== notPaper && remainingCountPaper(p) > 0)
+        .sort((a,b) => remainingCountPaper(b) - remainingCountPaper(a) || a.localeCompare(b))[0];
+    };
 
     // Helper to compute bench layout and iterate desk numbers in order
     const benchesFor = (room: Classroom) => {
@@ -264,7 +304,7 @@ export async function intelligentSeating(input: IntelligentSeatingInput): Promis
             const top = pickTopPaper();
             if (!top) break;
             const s1 = popFromPaper(top);
-            const otherPaper = pickOtherPaper(top);
+            const otherPaper = pickOtherPaper(top, s1 || undefined);
             const s2 = otherPaper ? popFromPaper(otherPaper) : null;
 
             if (s1) {
@@ -288,8 +328,11 @@ export async function intelligentSeating(input: IntelligentSeatingInput): Promis
 
           // If one side occupied, try fill ONLY with a different paper; otherwise leave empty
           const occupied = side1 || side2;
-          const occupiedPaper = occupied!.paper;
-          const otherPaper = pickOtherPaper(occupiedPaper);
+          if (!occupied) continue;
+          const occupiedPaper = occupied.paper;
+          // Find the original student from the assignments map
+          const originalStudent = students.find(s => s.rollNumber === occupied.rollNumber);
+          const otherPaper = pickOtherPaper(occupiedPaper, originalStudent);
           if (otherPaper) {
             const pick = popFromPaper(otherPaper);
             if (pick) {
