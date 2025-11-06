@@ -26,7 +26,8 @@ export const PrintReports = ({
           @import url('https://fonts.googleapis.com/css2?family=Times+New+Roman&family=Arial&display=swap');
           @media print {
             @page {
-              size: A4 landscape;
+              /* College requirement: Legal size landscape */
+              size: legal landscape;
               margin: 0.5in;
             }
             body {
@@ -65,7 +66,7 @@ export const PrintReports = ({
             className={`bg-white p-8 rounded-lg shadow-lg mx-auto w-full ${
               index > 0 ? "page-break mt-8" : ""
             }`}
-            style={{ maxWidth: '1100px' }} // Increased width for landscape
+            style={{ width: '13in' }} // Legal paper printable width (14in page - 2*0.5in margins)
           >
             {/* Header */}
             <div className="text-center mb-6">
@@ -134,6 +135,28 @@ export const PrintReports = ({
             </div>
 
             {/* Seating Columns Section */}
+            {/* Extract unique branch-semester combinations for this classroom */}
+            {(() => {
+              const branchSemSet = new Set<string>();
+              report.columns.forEach(col => {
+                col?.forEach(student => {
+                  if (student?.assignment?.roomName === report.classroom.roomName) {
+                    branchSemSet.add(`${student.branch}-${student.semesterSection}`);
+                  }
+                });
+              });
+              const branchSemList = Array.from(branchSemSet).sort();
+              return (
+                <div>
+                  {branchSemList.length > 0 && (
+                    <div className="mb-4 p-2 bg-gray-100 rounded">
+                      <p className="text-sm font-semibold">Branch-Semester Groups:</p>
+                      <p className="text-xs">{branchSemList.join(' | ')}</p>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
             <div className={`grid grid-cols-${report.classroom.numberOfColumns} gap-x-4`}>
               {Array.from({ length: report.classroom.numberOfColumns }).map((_, colIndex) => {
                 const mainColHeader = `Column ${colIndex + 1}`;
@@ -145,6 +168,11 @@ export const PrintReports = ({
                 
                 const students1 = report.columns[subCol1Index] || [];
                 const students2 = report.columns[subCol2Index] || [];
+                
+                const extractRollSuffix = (rollNumber: string) => {
+                  const parts = rollNumber.split('-');
+                  return parts[parts.length - 1];
+                };
 
                 return (
                   <div key={colIndex}>
@@ -174,9 +202,9 @@ export const PrintReports = ({
                             return (
                               <tr key={rowIndex}>
                                 <td className="p-1 h-6 text-center">{student1?.assignment?.serialNumber || ''}</td>
-                                <td className="p-1 h-6 text-center font-semibold">{student1?.rollNumber || ''}</td>
+                                <td className="p-1 h-6 text-center font-semibold">{student1 ? extractRollSuffix(student1.rollNumber) : ''}</td>
                                 <td className="p-1 h-6 text-center">{student2?.assignment?.serialNumber || ''}</td>
-                                <td className="p-1 h-6 text-center font-semibold">{student2?.rollNumber || ''}</td>
+                                <td className="p-1 h-6 text-center font-semibold">{student2 ? extractRollSuffix(student2.rollNumber) : ''}</td>
                               </tr>
                             );
                           }

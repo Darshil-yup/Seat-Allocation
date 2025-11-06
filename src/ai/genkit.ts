@@ -1,2 +1,4 @@
-// AI functionality replaced with algorithmic approach
-// No longer requires API keys or external AI services
+// Simple seating algorithm - no AI dependencies required
+export const ai = {
+  // Placeholder for future AI integration
+};

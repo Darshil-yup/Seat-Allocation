@@ -5,6 +5,7 @@ export type Classroom = {
   roomName: string;
   totalCapacity: number;
   numberOfColumns: number;
+  desksPerColumn?: number[]; // Optional: specific desks per column
 };
 
 export type Student = AIStudent & { 
@@ -13,8 +14,7 @@ export type Student = AIStudent & {
 };
 
 // Add serialNumber to the assignment details
-export type StudentAssignment = Omit<AIStudentAssignment, 'assignment' | 'paper'> & {
-    paper: string;
+export type StudentAssignment = Omit<AIStudentAssignment, 'assignment'> & {
     branch: 'CT' | 'AIDS' | 'CSE(IOT)' | string;
     semesterSection: string;
     assignment?: {
@@ -24,7 +24,6 @@ export type StudentAssignment = Omit<AIStudentAssignment, 'assignment' | 'paper'
         serialNumber: number;
     };
 };
-
 
 export type Allocation = {
     assignments: StudentAssignment[];

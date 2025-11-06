@@ -36,17 +36,14 @@ export const generatePrintData = (
 ): PrintReportData[] => {
   return classrooms
     .map((classroom) => {
-      // 1. Get all students for the current classroom and sort them by their global serial number
+      // 1) Collect and order students by serial number within this classroom
       const studentsInClassroom = allAssignments
         .filter((a) => a.assignment?.roomName === classroom.roomName)
-        .sort(
-          (a, b) =>
-            (a.assignment?.serialNumber || 0) - (b.assignment?.serialNumber || 0)
-        );
+        .sort((a, b) => (a.assignment?.serialNumber || 0) - (b.assignment?.serialNumber || 0));
 
       if (studentsInClassroom.length === 0) return null;
 
-      // 2. Generate the summary table data
+      // 2) Build summary rows: Paper (Branch - Sem) with roll ranges
       const groups = studentsInClassroom.reduce((acc, student) => {
         const key = `${student.paper}-${student.branch}-${student.semesterSection}`;
         if (!acc[key]) acc[key] = [];
@@ -63,84 +60,68 @@ export const generatePrintData = (
             const [, numB] = extractParts(b);
             return numA - numB;
           });
-          const fromRoll = rollNumbers[0];
-          const toRoll = rollNumbers[rollNumbers.length - 1];
-
           return {
             paper: `${paper} (${branch} - ${semesterSection})`,
-            from: fromRoll,
-            to: toRoll,
+            from: rollNumbers[0],
+            to: rollNumbers[rollNumbers.length - 1],
             total: group.length,
           };
         })
         .filter((s): s is NonNullable<typeof s> => s !== null)
         .sort((a, b) => a.paper.localeCompare(b.paper));
 
-      // 3. Group students by semester and arrange in columns
-      const getSemester = (student: StudentAssignment) => {
-        // Extract semester from semesterSection (e.g., "3" from "3-A" or "5" from "5-B")
-        const parts = student.semesterSection.split('-');
-        return parts[0]?.trim() || '0';
-      };
+      // 3) Arrange into physical columns and rows based on bench distribution
+      const columns = Math.max(1, classroom.numberOfColumns);
+      const benchesPerColumn: number[] = (() => {
+        // If an explicit desks-per-column distribution is provided, respect it
+        if (classroom.desksPerColumn && classroom.desksPerColumn.length === columns) {
+          return classroom.desksPerColumn;
+        }
+        // Fallback: distribute benches as evenly as possible across columns
+        const benches = Math.ceil(classroom.totalCapacity / 2);
+        const basePerCol = Math.floor(benches / columns);
+        const remainder = benches % columns;
+        return Array.from({ length: columns }, (_, i) => basePerCol + (i < remainder ? 1 : 0));
+      })();
 
-      // Group students by semester
-      const studentsBySemester = studentsInClassroom.reduce((acc, student) => {
-        const semester = getSemester(student);
-        if (!acc[semester]) acc[semester] = [];
-        acc[semester].push(student);
-        return acc;
-      }, {} as Record<string, StudentAssignment[]>);
+      // Map deskNumber -> [Side1, Side2]
+      const deskMap = new Map<number, { s1: StudentAssignment | null; s2: StudentAssignment | null }>();
+      for (const s of studentsInClassroom) {
+        const dn = s.assignment!.deskNumber;
+        const side = s.assignment!.side;
+        const entry = deskMap.get(dn) || { s1: null, s2: null };
+        if (side === 'Side 1') entry.s1 = s; else entry.s2 = s;
+        deskMap.set(dn, entry);
+      }
 
-      // Sort semesters (3, 5, etc.)
-      const sortedSemesters = Object.keys(studentsBySemester).sort((a, b) => parseInt(a) - parseInt(b));
-
-      const numberOfColumns = classroom.numberOfColumns * 2; // Each physical column has 2 sub-columns
       const finalColumns: (StudentAssignment | null)[][] = [];
       const finalColumnGroups: (string | undefined)[] = [];
 
-      // Distribute columns among semesters
-      const columnsPerSemester = Math.floor(numberOfColumns / sortedSemesters.length);
-      const extraColumns = numberOfColumns % sortedSemesters.length;
+      let deskOffset = 0;
+      let maxRows = 0;
 
-      let columnIndex = 0;
+      for (let col = 0; col < columns; col++) {
+        const rows = benchesPerColumn[col];
+        maxRows = Math.max(maxRows, rows);
 
-      for (let semIndex = 0; semIndex < sortedSemesters.length; semIndex++) {
-        const semester = sortedSemesters[semIndex];
-        const studentsInSemester = studentsBySemester[semester];
+        const left: (StudentAssignment | null)[] = [];
+        const right: (StudentAssignment | null)[] = [];
 
-        // Calculate how many columns this semester gets
-        let semesterColumns = columnsPerSemester;
-        if (semIndex < extraColumns) semesterColumns++; // Distribute extra columns
-
-        // Calculate students per column for this semester
-        const studentsPerColumn = Math.ceil(studentsInSemester.length / semesterColumns);
-
-        // Create columns for this semester
-        for (let i = 0; i < semesterColumns; i++) {
-          const startIndex = i * studentsPerColumn;
-          const endIndex = startIndex + studentsPerColumn;
-          const columnStudents = studentsInSemester.slice(startIndex, endIndex);
-
-          finalColumns.push(columnStudents);
-          finalColumnGroups.push(semester);
-          columnIndex++;
+        for (let row = 1; row <= rows; row++) {
+          const deskNumber = deskOffset + row;
+          const entry = deskMap.get(deskNumber) || { s1: null, s2: null };
+          left.push(entry.s1);
+          right.push(entry.s2);
         }
+
+        finalColumns.push(left, right);
+        finalColumnGroups.push('Roll No', 'Roll No');
+        deskOffset += benchesPerColumn[col];
       }
 
-      // Fill remaining columns if any
-      while (finalColumns.length < numberOfColumns) {
-        finalColumns.push([]);
-        finalColumnGroups.push(undefined);
-      }
-
-      // Find the maximum number of rows needed in any sub-column
-      const maxRows = Math.max(...finalColumns.map(col => col.length));
-
-      // Pad shorter sub-columns with nulls to ensure equal height in the table
+      // Pad to equal height
       finalColumns.forEach((subCol) => {
-        while (subCol.length < maxRows) {
-          subCol.push(null);
-        }
+        while (subCol.length < maxRows) subCol.push(null);
       });
 
       return {

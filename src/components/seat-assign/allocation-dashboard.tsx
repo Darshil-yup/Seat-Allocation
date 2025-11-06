@@ -1,7 +1,7 @@
 "use client";
 
+import React, { useMemo, useState } from "react";
 import type { Classroom, Allocation, Student } from "@/types";
-import { useMemo, useState } from "react";
 import {
   Card,
   CardContent,
@@ -36,7 +36,6 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-
 import { Progress } from "@/components/ui/progress";
 import { Button } from "@/components/ui/button";
 import { FileDown, Printer, Loader2, ChevronsUpDown } from "lucide-react";
@@ -45,7 +44,7 @@ import { PrintReports } from "./print-reports";
 import { createRoot } from "react-dom/client";
 import { format } from "date-fns";
 import { generatePrintData } from "@/lib/print-utils";
-
+import * as XLSX from 'xlsx';
 
 type AllocationDashboardProps = {
   classrooms: Classroom[];
@@ -54,7 +53,7 @@ type AllocationDashboardProps = {
   isLoading: boolean;
 };
 
-const AllocationDashboard = ({
+const AllocationDashboard = React.memo(({
   classrooms,
   students,
   allocation,
@@ -101,92 +100,327 @@ const AllocationDashboard = ({
     }, {} as Record<string, Student[]>);
   }, [allocation.unassignedStudents]);
 
-
-
   const downloadMasterSheet = () => {
     const classroomReports = generatePrintData(classrooms, allocation.assignments);
-    let csvContent = "data:text/csv;charset=utf-8,";
-    let header = "";
+    const wb = XLSX.utils.book_new();
 
-    // Create header
+    const currentYear = new Date().getFullYear();
+    const nextYear = (currentYear + 1).toString().slice(-2);
+    const academicYear = `${currentYear}-${nextYear}`;
+
+    // Helper to extract only subject name from "Subject (Branch - Sem)"
+    const extractSubjectName = (value: string) => {
+      const match = value.match(/^([^(]+)/);
+      return match ? match[1].trim() : value;
+    };
+    
+    // Helper to extract only roll number suffix
+    const extractRollSuffix = (rollNumber: string) => {
+      const parts = rollNumber.split('-');
+      return parts[parts.length - 1];
+    };
+
+    // Master sheet
+    const masterSheetData = [['Master Seating Chart']];
+    masterSheetData.push(['']); // Empty row
+
+    classroomReports.forEach(report => {
+        masterSheetData.push([`Room No: ${report.classroom.roomName}`]);
+        masterSheetData.push(['Subject', 'From', 'To', 'Total']);
+        report.summary.forEach(s => {
+            const subjectName = extractSubjectName(s.paper);
+            const fromSuffix = extractRollSuffix(s.from);
+            const toSuffix = extractRollSuffix(s.to);
+            masterSheetData.push([subjectName, fromSuffix, toSuffix, s.total.toString()]);
+        });
+        const totalAll = report.summary.reduce((acc, s) => acc + s.total, 0);
+        masterSheetData.push(['Total', '', '', totalAll.toString()]);
+        masterSheetData.push(['']); // Empty row
+    });
+
+    const wsMaster = XLSX.utils.aoa_to_sheet(masterSheetData);
+
+    const merges: any[] = [];
+    let rowIndex = 0;
+    masterSheetData.forEach(row => {
+        if (row[0] && row[0].toString().startsWith("Room No:")) {
+            merges.push({ s: { r: rowIndex, c: 0 }, e: { r: rowIndex, c: 3 } });
+        }
+        rowIndex++;
+    });
+    wsMaster['!merges'] = merges;
+
+
+    XLSX.utils.book_append_sheet(wb, wsMaster, 'Master Sheet');
+
+    // Displaying Sheet - Summary of classrooms with papers and roll ranges
+    const displayingSheetData = [
+      ['Yeshwantrao Chavan College of Engineering'],
+      ['(An Autonomous Institution under R.T.M. Nagpur University)'],
+      ['Department of Computer Technology'],
+      [`Seating Arrangement for ${examType} - ${semester} ${academicYear}`],
+      [`Date: ${printDate}`],
+      [''],
+      ['Room', 'Paper/Subject', 'Branch-Semester', 'Roll Number Range', 'Total Students']
+    ];
+
+    // Helper to parse "Subject (Branch - Sem)" into parts
+    const parseSummaryPaper = (value: string) => {
+      const match = value.match(/^(.*)\((.*)\)$/);
+      return {
+        paperName: match ? match[1].trim() : value,
+        branchSem: match ? match[2].trim() : ''
+      };
+    };
+
     classroomReports.forEach(report => {
       const roomName = report.classroom.roomName;
-      for (let i = 1; i <= report.classroom.numberOfColumns; i++) {
-        header += `"${roomName} Col ${i}",`;
-      }
-      header += ","; // Add a separator column between classrooms
-    });
-    csvContent += header.slice(0, -1) + "\n";
-
-    // Find max rows needed across all classrooms
-    const maxRows = Math.max(
-      ...classroomReports.map(r => r.maxRowsInColumn),
-      0
-    );
-
-    // Create rows
-    for (let i = 0; i < maxRows; i++) {
-      let row = "";
-      classroomReports.forEach(report => {
-        for (let j = 0; j < report.classroom.numberOfColumns; j++) {
-          const student1 = report.columns[j * 2]?.[i];
-          const student2 = report.columns[j * 2 + 1]?.[i];
-          const cellValue1 = student1 ? `${student1.rollNumber} (${student1.paper})` : '';
-          const cellValue2 = student2 ? `${student2.rollNumber} (${student2.paper})` : '';
-          // Combine the two sub-columns into one CSV cell
-          row += `"${cellValue1} | ${cellValue2}",`;
-        }
-        row += ","; // Separator
+      let isFirstRow = true;
+      
+      report.summary.forEach(summary => {
+        const { paperName, branchSem } = parseSummaryPaper(summary.paper);
+        const fromSuffix = extractRollSuffix(summary.from);
+        const toSuffix = extractRollSuffix(summary.to);
+        const rollRange = `${fromSuffix} to ${toSuffix}`;
+        
+        displayingSheetData.push([
+          isFirstRow ? roomName : '', // Only show room name on first row
+          paperName,
+          branchSem,
+          rollRange,
+          summary.total.toString()
+        ]);
+        isFirstRow = false;
       });
-      csvContent += row.slice(0, -1) + "\n";
-    }
+      
+      // Helper function inside forEach
+      function extractRollSuffix(rollNumber: string) {
+        const parts = rollNumber.split('-');
+        return parts[parts.length - 1];
+      }
+      
+      // Add empty row between classrooms
+      displayingSheetData.push(['', '', '', '', '']);
+    });
 
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
-    link.setAttribute("download", "master_seating_chart.csv");
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    const wsDisplaying = XLSX.utils.aoa_to_sheet(displayingSheetData);
+    
+    // Add merges for header and room names that span multiple rows
+    const displayMerges: any[] = [
+      // Header merges
+      { s: { r: 0, c: 0 }, e: { r: 0, c: 4 } }, // College name
+      { s: { r: 1, c: 0 }, e: { r: 1, c: 4 } }, // University info
+      { s: { r: 2, c: 0 }, e: { r: 2, c: 4 } }, // Department
+      { s: { r: 3, c: 0 }, e: { r: 3, c: 4 } }, // Seating arrangement title
+      { s: { r: 4, c: 0 }, e: { r: 4, c: 4 } }, // Date
+    ];
+    
+    let currentRow = 7; // Start after headers (0-5 are header rows, 6 is column headers)
+    classroomReports.forEach(report => {
+      const rowCount = report.summary.length;
+      if (rowCount > 1) {
+        displayMerges.push({ 
+          s: { r: currentRow, c: 0 }, 
+          e: { r: currentRow + rowCount - 1, c: 0 } 
+        });
+      }
+      currentRow += rowCount + 1; // +1 for empty row
+    });
+    wsDisplaying['!merges'] = displayMerges;
+
+    XLSX.utils.book_append_sheet(wb, wsDisplaying, 'Displaying Sheet');
+
+    // Individual classroom sheets
+    classroomReports.forEach(report => {
+        const roomName = report.classroom.roomName;
+        const individualSheetData = [];
+
+        // Header
+        individualSheetData.push(['Yeshwantrao Chavan College of Engineering']);
+        individualSheetData.push(['(An Autonomous Institution under R.T.M. Nagpur University)']);
+        individualSheetData.push(['Department of Computer Technology']);
+        individualSheetData.push([`Seating Arrangement for ${examType} - ${semester} ${academicYear}`]);
+        individualSheetData.push(['Date', printDate]);
+        individualSheetData.push(['Room No.', roomName]);
+        individualSheetData.push(['']);
+
+        // Extract and display unique branch-semester groups
+        const branchSemSet = new Set<string>();
+        report.columns.forEach(col => {
+          col?.forEach(student => {
+            if (student?.assignment?.roomName === roomName) {
+              branchSemSet.add(`${student.branch}-${student.semesterSection}`);
+            }
+          });
+        });
+        const branchSemList = Array.from(branchSemSet).sort();
+        if (branchSemList.length > 0) {
+          individualSheetData.push(['Branch-Semester Groups:', branchSemList.join(' | ')]);
+          individualSheetData.push(['']);
+        }
+
+        // Summary table with simplified subject and roll suffixes
+        individualSheetData.push(['Subject', 'From', 'To', 'Total']);
+        report.summary.forEach(s => {
+            const subjectName = extractSubjectName(s.paper);
+            const fromSuffix = extractRollSuffix(s.from);
+            const toSuffix = extractRollSuffix(s.to);
+            individualSheetData.push([subjectName, fromSuffix, toSuffix, s.total]);
+        });
+        const totalAll = report.summary.reduce((acc, s) => acc + s.total, 0);
+        individualSheetData.push(['Total', '', '', totalAll]);
+        individualSheetData.push(['']);
+
+        // Seating arrangement
+        const maxRows = report.maxRowsInColumn;
+        const numCols = report.classroom.numberOfColumns;
+        const seatingHeaders = [];
+        for (let i = 1; i <= numCols; i++) {
+            seatingHeaders.push(`Column ${i}`);
+        }
+        individualSheetData.push(seatingHeaders);
+
+        for (let r = 0; r < maxRows; r++) {
+            const rowData = [];
+            for (let c = 0; c < numCols; c++) {
+                const student1 = report.columns[c * 2]?.[r];
+                const student2 = report.columns[c * 2 + 1]?.[r];
+                const rollSuffix1 = student1 ? extractRollSuffix(student1.rollNumber) : '';
+                const rollSuffix2 = student2 ? extractRollSuffix(student2.rollNumber) : '';
+                const cellValue1 = student1 ? `${student1.assignment?.serialNumber ?? ''}. ${rollSuffix1}` : '';
+                const cellValue2 = student2 ? `${student2.assignment?.serialNumber ?? ''}. ${rollSuffix2}` : '';
+                rowData.push(`${cellValue1} | ${cellValue2}`);
+            }
+            individualSheetData.push(rowData);
+        }
+
+        const wsRoom = XLSX.utils.aoa_to_sheet(individualSheetData);
+        XLSX.utils.book_append_sheet(wb, wsRoom, roomName);
+    });
+
+
+    XLSX.writeFile(wb, 'master_seating_chart.xlsx');
   };
-
 
   const handlePrint = () => {
     setIsPrintDialogOpen(false);
 
-    // Filter assignments by selected paper
     const filteredAssignments = selectedPaper === "all" 
       ? allocation.assignments 
       : allocation.assignments.filter(assignment => assignment.paper === selectedPaper);
 
     const classroomReports = generatePrintData(classrooms, filteredAssignments);
 
-    const printWindow = window.open("", "_blank");
-    if (printWindow) {
-      printWindow.document.write(`
+    const printWindow = window.open("about:blank", "_blank");
+    if (!printWindow) {
+      // Fallback: print via hidden iframe to avoid pop-up blockers
+      const iframe = document.createElement('iframe');
+      iframe.style.position = 'fixed';
+      iframe.style.right = '0';
+      iframe.style.bottom = '0';
+      iframe.style.width = '0';
+      iframe.style.height = '0';
+      iframe.style.border = '0';
+      document.body.appendChild(iframe);
+
+      const doc = iframe.contentDocument!;
+      doc.open();
+      doc.write(`
         <html>
           <head>
             <title>Classroom Seating Charts</title>
             <script src="https://cdn.tailwindcss.com"></script>
           </head>
           <body>
-            <div id="print-root"></div>
+            <div id=\"print-root\"></div>
           </body>
         </html>
       `);
-      printWindow.document.close();
+      doc.close();
 
-      const printRootEl = printWindow.document.getElementById("print-root");
-      if (printRootEl) {
-        const root = createRoot(printRootEl);
-        root.render(<PrintReports classroomReports={classroomReports} printDate={printDate} semester={semester} examType={examType} />);
+      const onIframeLoad = () => {
+        const iDoc = iframe.contentDocument!;
+        const iWin = iframe.contentWindow!;
+        const rootEl = iDoc.getElementById('print-root');
+        if (!rootEl) return;
 
-        // Give React time to render before printing
-        setTimeout(() => {
-          printWindow.print();
-        }, 1000);
-      }
+        const root = createRoot(rootEl);
+        root.render(
+          <PrintReports 
+            classroomReports={classroomReports} 
+            printDate={printDate} 
+            semester={semester} 
+            examType={examType} 
+          />
+        );
+
+        const waitAndPrint = () => {
+          const ready = rootEl.children.length > 0;
+          if (ready) {
+            iWin.focus();
+            setTimeout(() => {
+              iWin.print();
+            }, 300); // give Tailwind CDN time to apply styles
+            iWin.addEventListener('afterprint', () => {
+              try { iframe.remove(); } catch {}
+            }, { once: true });
+          } else {
+            iWin.requestAnimationFrame(waitAndPrint);
+          }
+        };
+
+        waitAndPrint();
+      };
+
+      if (doc.readyState === 'complete') onIframeLoad();
+      else iframe.addEventListener('load', onIframeLoad, { once: true });
+      return;
     }
+
+    printWindow.document.write(`
+      <html>
+        <head>
+          <title>Classroom Seating Charts</title>
+          <script src="https://cdn.tailwindcss.com"></script>
+        </head>
+        <body>
+          <div id="print-root"></div>
+        </body>
+      </html>
+    `);
+    printWindow.document.close();
+
+    const onLoad = () => {
+      const printRootEl = printWindow.document.getElementById("print-root");
+      if (!printRootEl) return;
+
+      const root = createRoot(printRootEl);
+      root.render(
+        <PrintReports 
+          classroomReports={classroomReports} 
+          printDate={printDate} 
+          semester={semester} 
+          examType={examType} 
+        />
+      );
+
+      const waitAndPrint = () => {
+        const ready = printRootEl.children.length > 0;
+        if (ready) {
+          printWindow.focus();
+          setTimeout(() => {
+            printWindow.print();
+          }, 50);
+        } else {
+          printWindow.requestAnimationFrame(waitAndPrint);
+        }
+      };
+
+      waitAndPrint();
+    };
+
+    // Some browsers won't fire load after document.write; call immediately
+    try { onLoad(); } catch { /* ignore */ }
   };
 
 
@@ -241,10 +475,6 @@ const AllocationDashboard = ({
           <p className="font-bold text-lg">{students.length}</p>
         </div>
         <div className="mt-2 p-4 bg-muted/50 rounded-lg flex justify-between items-center">
-          <p className="font-medium">Total Seats</p>
-          <p className="font-bold text-lg">{totalCapacity}</p>
-        </div>
-        <div className="mt-2 p-4 bg-muted/50 rounded-lg flex justify-between items-center">
           <p className="font-medium text-green-600">Assigned Students</p>
           <p className="font-bold text-lg text-green-600">{allocation.assignments.length}</p>
         </div>
@@ -282,7 +512,7 @@ const AllocationDashboard = ({
       </CardContent>
       <CardFooter className="flex-col sm:flex-row justify-end gap-2 pt-6">
         <Button variant="outline" onClick={downloadMasterSheet} disabled={!students.length}>
-          <FileDown className="mr-2 h-4 w-4" /> Master Sheet (CSV)
+          <FileDown className="mr-2 h-4 w-4" /> Master Sheet (XLSX)
         </Button>
         <Dialog open={isPrintDialogOpen} onOpenChange={setIsPrintDialogOpen}>
           <DialogTrigger asChild>
@@ -379,7 +609,7 @@ const AllocationDashboard = ({
       </CardFooter>
     </Card>
   );
-};
+});
 
+AllocationDashboard.displayName = 'AllocationDashboard';
 export default AllocationDashboard;
-

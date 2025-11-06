@@ -1,7 +1,7 @@
 "use client";
 
+import React, { useState, useMemo } from "react";
 import type { Student } from "@/types";
-import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -13,24 +13,37 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Users, PlusCircle, Trash2 } from "lucide-react";
+import { Users, PlusCircle, Trash2, ChevronDown } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useToast } from "@/hooks/use-toast";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 
 type StudentManagerProps = {
   students: Student[];
   setStudents: React.Dispatch<React.SetStateAction<Student[]>>;
 };
 
-const StudentManager = ({ students, setStudents }: StudentManagerProps) => {
+const StudentManager = React.memo(({ students, setStudents }: StudentManagerProps) => {
   const [manualRoll, setManualRoll] = useState("");
   const [manualPaper, setManualPaper] = useState("");
   const [manualBranch, setManualBranch] = useState<string>("");
   const [manualSemester, setManualSemester] = useState("");
   
   const [range, setRange] = useState({ start: "", end: "", paper: "", branch: "", semesterSection: "" });
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
   const { toast } = useToast();
+  
+  // Memoize grouped students to prevent recalculation
+  const { groupedStudents, sortedGroupKeys } = useMemo(() => {
+    const grouped = students.reduce((acc, s) => {
+      const key = `${s.branch}-${s.semesterSection}`;
+      if (!acc[key]) acc[key] = [];
+      acc[key].push(s);
+      return acc;
+    }, {} as Record<string, Student[]>);
+    return { groupedStudents: grouped, sortedGroupKeys: Object.keys(grouped).sort() };
+  }, [students]);
 
   const getSemesterNumber = (semesterSection: string) => {
     return semesterSection.split('-')[0].trim();
@@ -274,31 +287,64 @@ const StudentManager = ({ students, setStudents }: StudentManagerProps) => {
                     </Button>
                 )}
             </div>
-          <ScrollArea className="h-40 border rounded-lg p-2">
+          <ScrollArea className="h-72 border rounded-lg p-2">
             {students.length > 0 ? (
-              <ul className="space-y-1">
-                {students.map((s) => (
-                  <li
-                    key={s.rollNumber}
-                    className="flex justify-between items-center p-2 rounded-md hover:bg-secondary"
-                  >
-                    <div>
-                        <span className="text-sm font-medium">{s.rollNumber}</span>
-                        <span className="text-xs text-muted-foreground ml-2">({s.branch} - {s.semesterSection})</span>
-                    </div>
-                    <div className="flex items-center gap-4">
-                        <span className="text-sm">{s.paper}</span>
-                        <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-6 w-6"
-                        onClick={() => deleteStudent(s.rollNumber)}
-                        >
-                        <Trash2 className="h-4 w-4 text-destructive" />
-                        </Button>                    </div>
-                  </li>
-                ))}
-              </ul>
+              <div className="space-y-2">
+                {sortedGroupKeys.map((group) => {
+                  const groupStudents = groupedStudents[group]!;
+                  const isOpen = expandedGroups[group] ?? false;
+                  
+                  return (
+                    <Collapsible
+                      key={group}
+                      open={isOpen}
+                      onOpenChange={(open) =>
+                        setExpandedGroups((prev) => ({ ...prev, [group]: open }))
+                      }
+                    >
+                      <CollapsibleTrigger asChild>
+                        <button className="w-full">
+                          <div className="flex items-center justify-between w-full p-2 rounded-md hover:bg-secondary bg-muted/50 border">
+                            <span className="text-sm font-semibold">
+                              {group} ({groupStudents.length})
+                            </span>
+                            <ChevronDown
+                              className={`h-4 w-4 transition-transform ${
+                                isOpen ? "rotate-180" : ""
+                              }`}
+                            />
+                          </div>
+                        </button>
+                      </CollapsibleTrigger>
+                      <CollapsibleContent className="pl-4 border-l mt-1">
+                        <ul className="space-y-1 mt-2">
+                          {groupStudents.map((s) => (
+                            <li
+                              key={s.rollNumber}
+                              className="flex justify-between items-center p-2 rounded-md hover:bg-secondary text-sm"
+                            >
+                              <div>
+                                <span className="font-medium">{s.rollNumber}</span>
+                                <span className="text-xs text-muted-foreground ml-2">
+                                  {s.paper}
+                                </span>
+                              </div>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-5 w-5"
+                                onClick={() => deleteStudent(s.rollNumber)}
+                              >
+                                <Trash2 className="h-3 w-3 text-destructive" />
+                              </Button>
+                            </li>
+                          ))}
+                        </ul>
+                      </CollapsibleContent>
+                    </Collapsible>
+                  );
+                })}
+              </div>
             ) : (
               <div className="flex items-center justify-center h-full text-muted-foreground">
                 <p>No students added yet.</p>
@@ -309,6 +355,7 @@ const StudentManager = ({ students, setStudents }: StudentManagerProps) => {
       </CardContent>
     </Card>
   );
-};
+});
 
+StudentManager.displayName = 'StudentManager';
 export default StudentManager;

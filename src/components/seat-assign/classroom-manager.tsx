@@ -1,7 +1,7 @@
 "use client";
 
+import React, { useState } from "react";
 import type { Classroom } from "@/types";
-import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
@@ -38,6 +38,8 @@ import {
   FileDown,
   Upload,
 } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 import { ScrollArea } from "@/components/ui/scroll-area";
 
@@ -46,12 +48,13 @@ const formSchema = z.object({
   totalCapacity: z.coerce
     .number()
     .int()
-    .min(1, "Capacity must be at least 1."),
+    .min(0, "Capacity must be at least 0."), // Allow 0 for advanced mode
   numberOfColumns: z.coerce
     .number()
     .int()
     .min(1, "Columns must be at least 1.")
     .max(8, "Columns cannot exceed 8."),
+  desksPerColumn: z.string().optional(),
 });
 
 type ClassroomManagerProps = {
@@ -59,27 +62,96 @@ type ClassroomManagerProps = {
   setClassrooms: React.Dispatch<React.SetStateAction<Classroom[]>>;
 };
 
-const ClassroomManager = ({
+const ClassroomManager = React.memo(({
   classrooms,
   setClassrooms,
 }: ClassroomManagerProps) => {
   const { toast } = useToast();
+  const [useAdvancedMode, setUseAdvancedMode] = useState(false);
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
     defaultValues: {
       roomName: "",
       totalCapacity: 0,
       numberOfColumns: 4,
+      desksPerColumn: "",
     },
   });
 
   const onSubmit = (values: z.infer<typeof formSchema>) => {
+    console.log("Form submitted with values:", values);
+    console.log("Advanced mode:", useAdvancedMode);
+    
+    let desksPerColumn: number[] | undefined;
+    let totalCapacity = values.totalCapacity;
+
+    if (useAdvancedMode) {
+      // In advanced mode, we need desks per column
+      if (!values.desksPerColumn || values.desksPerColumn.trim() === "") {
+        toast({
+          title: "Missing Configuration",
+          description: "Please enter the number of desks per column.",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      try {
+        desksPerColumn = values.desksPerColumn
+          .split(',')
+          .map(s => parseInt(s.trim()))
+          .filter(n => !isNaN(n) && n > 0);
+        
+        console.log("Parsed desks per column:", desksPerColumn);
+        console.log("Expected columns:", values.numberOfColumns);
+        
+        if (desksPerColumn.length !== values.numberOfColumns) {
+          toast({
+            title: "Invalid Configuration",
+            description: `Please provide exactly ${values.numberOfColumns} desk counts separated by commas. Got ${desksPerColumn.length} values: [${desksPerColumn.join(', ')}]`,
+            variant: "destructive",
+          });
+          return;
+        }
+        
+        // Calculate total capacity from desks per column (each desk has 2 seats)
+        totalCapacity = desksPerColumn.reduce((sum, desks) => sum + (desks * 2), 0);
+        console.log("Calculated total capacity:", totalCapacity);
+      } catch (error) {
+        console.error("Error parsing desks per column:", error);
+        toast({
+          title: "Invalid Format",
+          description: "Please enter desk counts as numbers separated by commas (e.g., 8,7,7,8,7).",
+          variant: "destructive",
+        });
+        return;
+      }
+    } else {
+      // In simple mode, we need a valid total capacity
+      if (totalCapacity <= 0) {
+        toast({
+          title: "Invalid Capacity",
+          description: "Please enter a valid seating capacity (at least 1).",
+          variant: "destructive",
+        });
+        return;
+      }
+    }
+
     const newClassroom: Classroom = {
       id: new Date().toISOString(),
-      ...values,
+      roomName: values.roomName,
+      totalCapacity,
+      numberOfColumns: values.numberOfColumns,
+      desksPerColumn,
     };
+    
     setClassrooms((prev) => [...prev, newClassroom]);
     form.reset();
+    toast({
+      title: "Classroom Added",
+      description: `${values.roomName} has been added with ${totalCapacity} seats.`,
+    });
   };
 
   const deleteClassroom = (id: string) => {
@@ -121,12 +193,16 @@ const ClassroomManager = ({
         const reader = new FileReader();
         reader.onload = (event) => {
           try {
-            const loaded = JSON.parse(event.target.result as string) as Omit<Classroom, 'id'>[];
+            const result = (event.target as FileReader | null)?.result;
+            if (typeof result !== 'string') {
+              throw new Error('Failed to read file contents.');
+            }
+            const loaded = JSON.parse(result) as Omit<Classroom, 'id'>[];
             // Basic validation
             if (Array.isArray(loaded) && loaded.every(c => 'roomName' in c && 'totalCapacity' in c)) {
                const newClassroomsWithIds = loaded.map((c, index) => ({
                  ...c, 
-                 numberOfColumns: c.numberOfColumns || 4, // Add default for old configs
+                 numberOfColumns: (c as any).numberOfColumns || 4, // default for old configs
                  id: new Date().toISOString() + index
                 }));
                setClassrooms(newClassroomsWithIds);
@@ -165,6 +241,17 @@ const ClassroomManager = ({
         </div>
       </CardHeader>
       <CardContent>
+        <div className="mb-4 flex items-center space-x-2">
+          <Switch
+            id="advanced-mode"
+            checked={useAdvancedMode}
+            onCheckedChange={setUseAdvancedMode}
+          />
+          <Label htmlFor="advanced-mode">
+            Advanced Mode: Specify desks per column
+          </Label>
+        </div>
+        
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -181,19 +268,21 @@ const ClassroomManager = ({
                   </FormItem>
                 )}
               />
-              <FormField
-                control={form.control}
-                name="totalCapacity"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Seating Capacity</FormLabel>
-                    <FormControl>
-                      <Input type="number" min="1" placeholder="e.g., 50" {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
+              {!useAdvancedMode && (
+                <FormField
+                  control={form.control}
+                  name="totalCapacity"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Seating Capacity</FormLabel>
+                      <FormControl>
+                        <Input type="number" min="1" placeholder="e.g., 50" {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              )}
                <FormField
                 control={form.control}
                 name="numberOfColumns"
@@ -208,7 +297,39 @@ const ClassroomManager = ({
                 )}
               />
             </div>
-            <Button type="submit" className="w-full">
+            
+            {useAdvancedMode && (
+              <FormField
+                control={form.control}
+                name="desksPerColumn"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Desks per Column</FormLabel>
+                    <FormControl>
+                      <Input 
+                        placeholder="e.g., 8,7,7,8,7 (comma-separated)" 
+                        {...field} 
+                      />
+                    </FormControl>
+                    <FormMessage />
+                    <p className="text-sm text-muted-foreground">
+                      Enter the number of desks for each column separated by commas. 
+                      Each desk seats 2 students. Total capacity will be calculated automatically.
+                    </p>
+                  </FormItem>
+                )}
+              />
+            )}
+            
+            <Button 
+              type="submit" 
+              className="w-full"
+              onClick={() => {
+                console.log("Button clicked!");
+                console.log("Form values:", form.getValues());
+                console.log("Form errors:", form.formState.errors);
+              }}
+            >
               <PlusCircle className="mr-2 h-4 w-4" /> Add Classroom
             </Button>
           </form>
@@ -219,7 +340,7 @@ const ClassroomManager = ({
               <TableRow>
                 <TableHead>Room</TableHead>
                 <TableHead className="text-center">Capacity</TableHead>
-                <TableHead className="text-center">Columns</TableHead>
+                <TableHead className="text-center">Layout</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
@@ -229,7 +350,20 @@ const ClassroomManager = ({
                   <TableRow key={c.id}>
                     <TableCell className="font-medium">{c.roomName}</TableCell>
                     <TableCell className="text-center">{c.totalCapacity}</TableCell>
-                    <TableCell className="text-center">{c.numberOfColumns}</TableCell>
+                    <TableCell className="text-center">
+                      {c.desksPerColumn ? (
+                        <div className="text-xs">
+                          <div>{c.numberOfColumns} cols</div>
+                          <div className="text-muted-foreground">
+                            {c.desksPerColumn.join('-')} desks
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="text-xs">
+                          {c.numberOfColumns} columns
+                        </div>
+                      )}
+                    </TableCell>
                     <TableCell className="text-right">
                       <Button
                         variant="ghost"
@@ -262,6 +396,7 @@ const ClassroomManager = ({
       </CardFooter>
     </Card>
   );
-};
+});
 
+ClassroomManager.displayName = 'ClassroomManager';
 export default ClassroomManager;

@@ -3,8 +3,13 @@ import './globals.css';
 import { Toaster } from '@/components/ui/toaster';
 
 export const metadata: Metadata = {
-  title: 'SeatAssign',
+  title: 'YCCE-SeatAssign',
   description: 'Open Exam Seating Arrangement Generator',
+  icons: {
+    icon: '/logo-modified.jpg',
+    shortcut: '/logo-modified.jpg',
+    apple: '/logo-modified.jpg',
+  },
 };
 
 export default function RootLayout({
@@ -15,6 +20,8 @@ export default function RootLayout({
   return (
     <html lang="en" className="h-full">
       <head>
+        <link rel="icon" href="/favicon.ico" sizes="any" />
+        <link rel="apple-touch-icon" href="/logo-modified.jpg" />
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="" />
         <link
