@@ -62,7 +62,7 @@ const AllocationDashboard = React.memo(({
   const [printDate, setPrintDate] = useState(format(new Date(), 'dd.MM.yyyy'));
   const [semester, setSemester] = useState<"ODD" | "EVEN">("ODD");
   const [examType, setExamType] = useState<"MSE1" | "MSE 2" | "Re-MSE">("MSE 2");
-  const [selectedShift, setSelectedShift] = useState<"Paper I" | "Paper II">("Paper I");
+  const [selectedShift, setSelectedShift] = useState<"Shift I" | "Shift II">("Shift I");
   const [isPrintDialogOpen, setIsPrintDialogOpen] = useState(false);
   const [isUnassignedOpen, setIsUnassignedOpen] = useState(false);
 
@@ -298,16 +298,13 @@ const AllocationDashboard = React.memo(({
   const handlePrint = () => {
     setIsPrintDialogOpen(false);
 
-    // Filter assignments by the selected shift (Paper I or Paper II)
-    const filteredAssignments = allocation.assignments.filter(assignment => {
-      const semNum = parseInt(assignment.assignment?.roomName || '0');
-      // Paper I: odd semesters (3, 5, 7), Paper II: even semesters (2, 4, 6)
-      const assignmentShift = (assignment.semesterSection.startsWith('2') || assignment.semesterSection.startsWith('4') || assignment.semesterSection.startsWith('6')) ? "Paper II" : "Paper I";
-      return assignmentShift === selectedShift;
-    });
+    // For now, show all assignments (shifts are for display purposes)
+    // Selected shift will be shown in the print header
+    const filteredAssignments = allocation.assignments;
 
     const classroomReports = generatePrintData(classrooms, filteredAssignments);
-
+    console.log("Generated classroom reports for printing:", classroomReports);
+    console.log("Number of classrooms to print:", classroomReports.length);
     const printWindow = window.open("about:blank", "_blank");
     if (!printWindow) {
       // Fallback: print via hidden iframe to avoid pop-up blockers
@@ -327,6 +324,23 @@ const AllocationDashboard = React.memo(({
           <head>
             <title>Classroom Seating Charts</title>
             <script src="https://cdn.tailwindcss.com"></script>
+            <meta name="viewport" content="width=device-width, initial-scale=1" />
+            <style>
+              @media print {
+                @page {
+                  size: legal landscape;
+                  margin: 0.5in;
+                }
+              }
+              body {
+                margin: 0;
+                padding: 0;
+                background: #fff;
+              }
+              #print-root {
+                background: #fff;
+              }
+            </style>
           </head>
           <body>
             <div id=\"print-root\"></div>
@@ -348,16 +362,18 @@ const AllocationDashboard = React.memo(({
             printDate={printDate} 
             semester={semester} 
             examType={examType} 
+            shift={selectedShift}
           />
         );
 
         const waitAndPrint = () => {
-          const ready = rootEl.children.length > 0;
+          // Ensure the component is rendered and has content
+          const ready = rootEl.children.length > 0 && rootEl.querySelector('.bg-white');
           if (ready) {
             iWin.focus();
             setTimeout(() => {
               iWin.print();
-            }, 300); // give Tailwind CDN time to apply styles
+            }, 1000); // give Tailwind CDN time to apply styles
             iWin.addEventListener('afterprint', () => {
               try { iframe.remove(); } catch {}
             }, { once: true });
@@ -379,6 +395,23 @@ const AllocationDashboard = React.memo(({
         <head>
           <title>Classroom Seating Charts</title>
           <script src="https://cdn.tailwindcss.com"></script>
+          <meta name="viewport" content="width=device-width, initial-scale=1" />
+          <style>
+            @media print {
+              @page {
+                size: legal landscape;
+                margin: 0.5in;
+              }
+            }
+            body {
+              margin: 0;
+              padding: 0;
+              background: #fff;
+            }
+            #print-root {
+              background: #fff;
+            }
+          </style>
         </head>
         <body>
           <div id="print-root"></div>
@@ -398,16 +431,18 @@ const AllocationDashboard = React.memo(({
           printDate={printDate} 
           semester={semester} 
           examType={examType} 
+          shift={selectedShift}
         />
       );
 
       const waitAndPrint = () => {
-        const ready = printRootEl.children.length > 0;
+        // Ensure the component is rendered and has content
+        const ready = printRootEl.children.length > 0 && printRootEl.querySelector('.bg-white');
         if (ready) {
           printWindow.focus();
           setTimeout(() => {
             printWindow.print();
-          }, 50);
+          }, 1000);
         } else {
           printWindow.requestAnimationFrame(waitAndPrint);
         }
@@ -507,10 +542,12 @@ const AllocationDashboard = React.memo(({
         </Collapsible>
 
       </CardContent>
-      <CardFooter className="flex-col sm:flex-row justify-end gap-2 pt-6">
-        <Button variant="outline" onClick={downloadMasterSheet} disabled={!students.length}>
-          <FileDown className="mr-2 h-4 w-4" /> Master Sheet (XLSX)
-        </Button>
+      <CardFooter className="flex-col sm:flex-row justify-between gap-4 pt-6">
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={downloadMasterSheet} disabled={!students.length}>
+            <FileDown className="mr-2 h-4 w-4" /> Master Sheet (XLSX)
+          </Button>
+        </div>
         <Dialog open={isPrintDialogOpen} onOpenChange={setIsPrintDialogOpen}>
           <DialogTrigger asChild>
             <Button disabled={!allocation.assignments.length}>
@@ -539,18 +576,18 @@ const AllocationDashboard = React.memo(({
                   Shift
                 </Label>
                 <RadioGroup
-                  defaultValue="Paper I"
+                  defaultValue="Shift I"
                   className="col-span-3 flex gap-4"
-                  onValueChange={(value: "Paper I" | "Paper II") => setSelectedShift(value)}
+                  onValueChange={(value: "Shift I" | "Shift II") => setSelectedShift(value)}
                   value={selectedShift}
                 >
                   <div className="flex items-center space-x-2">
-                    <RadioGroupItem value="Paper I" id="r-paper-i" />
-                    <Label htmlFor="r-paper-i">Paper I (Odd Semesters)</Label>
+                    <RadioGroupItem value="Shift I" id="r-shift-i" />
+                    <Label htmlFor="r-shift-i">Shift I</Label>
                   </div>
                   <div className="flex items-center space-x-2">
-                    <RadioGroupItem value="Paper II" id="r-paper-ii" />
-                    <Label htmlFor="r-paper-ii">Paper II (Even Semesters)</Label>
+                    <RadioGroupItem value="Shift II" id="r-shift-ii" />
+                    <Label htmlFor="r-shift-ii">Shift II</Label>
                   </div>
                 </RadioGroup>
               </div>

@@ -28,11 +28,6 @@ const StudentSchema = z.object({
 
 export type Student = z.infer<typeof StudentSchema>;
 
-const IntelligentSeatingInputSchema = z.object({
-  classrooms: z.array(ClassroomSchema).describe('An array of classroom objects with name, capacity and columns.'),
-  students: z.array(StudentSchema).describe('An array of student objects with roll numbers and papers.'),
-});
-export type IntelligentSeatingInput = z.infer<typeof IntelligentSeatingInputSchema>;
 
 const SeatingAssignmentSchema = z.object({
   roomName: z.string().describe('The name of the assigned classroom.'),
@@ -48,6 +43,12 @@ const StudentAssignmentSchema = z.object({
 });
 
 export type StudentAssignment = z.infer<typeof StudentAssignmentSchema>;
+
+const IntelligentSeatingInputSchema = z.object({
+  classrooms: z.array(ClassroomSchema).describe('An array of classroom objects with name, capacity and columns.'),
+  students: z.array(StudentSchema).describe('An array of student objects with roll numbers and papers.'),
+});
+export type IntelligentSeatingInput = z.infer<typeof IntelligentSeatingInputSchema>;
 
 const IntelligentSeatingOutputSchema = z.object({
   assignments: z.array(StudentAssignmentSchema).describe('An array of student assignments with room, desk, and side.'),
@@ -65,296 +66,154 @@ function extractRollNumberNumeric(rollNumber: string): number {
 export async function intelligentSeating(input: IntelligentSeatingInput): Promise<IntelligentSeatingOutput> {
   const { classrooms, students } = input;
 
-  console.log("=== AI FLOW RECEIVED ===");
-  console.log("Classrooms:", JSON.stringify(classrooms, null, 2));
-  console.log("Students count:", students.length);
-
-  const totalCapacity = classrooms.reduce((sum: number, c: Classroom) => sum + c.totalCapacity, 0);
-
+  // Fresh allocation (no preservation)
   const assignments: StudentAssignment[] = [];
-  const unassignedStudents: Student[] = [];
 
-  // Helpers
-  const getSemesterNumber = (semSec: string) => semSec.split('-')[0]?.trim() || '0';
-
-  // 1) Group by branch, then by semester, and sort by roll within each
-  type BranchBuckets = Record<string, Record<string, Student[]>>; // branch -> sem -> students
-  const byBranch: BranchBuckets = {};
+  // Build per-paper queues preserving input paper order, with roll numbers ordered within each paper
+  const paperOrder: string[] = [];
+  const byPaper: Record<string, Student[]> = {};
   for (const s of students) {
-    const sem = getSemesterNumber(s.semesterSection);
-    if (!byBranch[s.branch]) byBranch[s.branch] = {};
-    if (!byBranch[s.branch][sem]) byBranch[s.branch][sem] = [];
-    byBranch[s.branch][sem].push(s);
+    if (!byPaper[s.paper]) {
+      byPaper[s.paper] = [];
+      paperOrder.push(s.paper);
+    }
+    byPaper[s.paper].push(s);
   }
-  Object.keys(byBranch).forEach(branch => {
-    Object.keys(byBranch[branch]).forEach(sem => {
-      byBranch[branch][sem].sort((a, b) => extractRollNumberNumeric(a.rollNumber) - extractRollNumberNumeric(b.rollNumber));
-    });
-  });
+  for (const p of paperOrder) {
+    byPaper[p].sort((a, b) => extractRollNumberNumeric(a.rollNumber) - extractRollNumberNumeric(b.rollNumber));
+  }
+  let paperIdx = 0; // round-robin pointer
 
-  const remainingInBranch = (branch: string) =>
-    Object.values(byBranch[branch] || {}).reduce((acc, arr) => acc + arr.length, 0);
-
-  const popFromBranchSemester = (branch: string, sem: string): Student | null => {
-    const arr = byBranch[branch]?.[sem];
-    return arr && arr.length > 0 ? arr.shift()! : null;
-  };
-
-  const allowedPairFor = (sem: string): string | null => {
-    // Pairing rule: 3<->5 and 4<->6; others: no enforced pair
-    const n = parseInt(sem, 10);
-    if (n === 3) return '5';
-    if (n === 5) return '3';
-    if (n === 4) return '6';
-    if (n === 6) return '4';
+  // Helper: pop next student round-robin across papers
+  const pop = (): Student | null => {
+    if (paperOrder.length === 0) return null;
+    let checked = 0;
+    while (checked < paperOrder.length) {
+      const paper = paperOrder[paperIdx];
+      const q = byPaper[paper];
+      paperIdx = (paperIdx + 1) % paperOrder.length;
+      checked++;
+      if (q && q.length) return q.shift()!;
+    }
     return null;
   };
 
-  const getTopTwoSemesters = (branch: string): string[] => {
-    const available = Object.keys(byBranch[branch] || {})
-      .filter(sem => (byBranch[branch][sem]?.length || 0) > 0)
-      .sort((a, b) => (byBranch[branch][b].length - byBranch[branch][a].length) || parseInt(a) - parseInt(b));
-
-    if (available.length === 0) return [];
-    if (available.length === 1) return [available[0]];
-
-    // Enforce pairing rule where applicable
-    const primary = available[0];
-    const wanted = allowedPairFor(primary);
-    if (wanted && available.includes(wanted)) {
-      return [primary, wanted];
+  // Helper: pop next student with a different paper, staying near current rotation
+  const popDifferentPaper = (avoid: string): Student | null => {
+    if (paperOrder.length === 0) return null;
+    let checked = 0;
+    let localIdx = paperIdx; // start from current rotation position
+    while (checked < paperOrder.length) {
+      const paper = paperOrder[localIdx];
+      const q = byPaper[paper];
+      localIdx = (localIdx + 1) % paperOrder.length;
+      checked++;
+      if (paper !== avoid && q && q.length) {
+        // Advance global pointer to the position after the queue we pulled from
+        paperIdx = localIdx;
+        return q.shift()!;
+      }
     }
-    // Fallback: pick next with most students
-    return [primary, available[1]];
+    return null;
   };
 
-  // 2) Sort classrooms: prefer 4-column rooms first, then 5, then others
-  const sortedClassrooms = [...classrooms].sort((a, b) => {
-    const pref = (cols: number) => (cols === 4 ? 0 : cols === 5 ? 1 : 2);
+  const hasRemaining = (): boolean => {
+    for (const p of paperOrder) {
+      if (byPaper[p]?.length) return true;
+    }
+    return false;
+  };
+
+  // Sort classrooms (prefer 4 columns, then 5, then others)
+  const sorted = [...classrooms].sort((a, b) => {
+    const pref = (c: number) => (c === 4 ? 0 : c === 5 ? 1 : 2);
     return pref(a.numberOfColumns) - pref(b.numberOfColumns) || a.roomName.localeCompare(b.roomName);
   });
 
-  // 3) Fill each classroom primarily with a single branch
-  for (const classroom of sortedClassrooms) {
-    if (Object.keys(byBranch).every(b => remainingInBranch(b) === 0)) break;
+  for (const room of sorted) {
+    if (!hasRemaining()) break;
 
-    // Choose the branch with the most remaining students
-    const chosenBranch = Object.keys(byBranch)
-      .filter(b => remainingInBranch(b) > 0)
-      .sort((a, b) => remainingInBranch(b) - remainingInBranch(a) || a.localeCompare(b))[0];
+    const columns = Math.max(1, room.numberOfColumns);
+    // benches per column (desks, 2 seats per desk)
+    const perCol: number[] = room.desksPerColumn && room.desksPerColumn.length === columns
+      ? room.desksPerColumn
+      : (() => {
+          const benches = Math.ceil(room.totalCapacity / 2);
+          const base = Math.floor(benches / columns);
+          const rem = benches % columns;
+          return Array.from({ length: columns }, (_, i) => base + (i < rem ? 1 : 0));
+        })();
 
-    const capacity = classroom.totalCapacity;
-    const columns = Math.max(1, classroom.numberOfColumns);
+    // Serial numbers start at 1 per room
+    let serial = 1;
 
-    console.log(`Processing classroom: ${classroom.roomName}`);
-    console.log(`Classroom desksPerColumn:`, classroom.desksPerColumn);
-    console.log(`Classroom columns:`, columns);
+    // Helper to get next paper with remaining students, advancing global rotation
+    const nextPaper = (exclude?: string): string | null => {
+      if (paperOrder.length === 0) return null;
+      let checked = 0;
+      while (checked < paperOrder.length) {
+        const p = paperOrder[paperIdx];
+        paperIdx = (paperIdx + 1) % paperOrder.length;
+        checked++;
+        if (p !== exclude && byPaper[p]?.length) return p;
+      }
+      return null;
+    };
 
-    // Use specific desks per column if provided, otherwise calculate evenly
-    const benchesPerColumn: number[] = classroom.desksPerColumn || (() => {
-      console.log(`No desksPerColumn provided, calculating evenly for ${capacity} capacity`);
-      const benches = Math.ceil(capacity / 2);
-      const basePerCol = Math.floor(benches / columns);
-      const remainder = benches % columns;
-      return Array.from({ length: columns }, (_, i) => basePerCol + (i < remainder ? 1 : 0));
-    })();
+    // Current locked pair for this room to keep sequences stable per side
+    let p1: string | null = null;
+    let p2: string | null = null;
+    const ensurePair = () => {
+      if (!p1 || !byPaper[p1]?.length) p1 = nextPaper();
+      if (!p2 || !byPaper[p2]?.length || p2 === p1) p2 = nextPaper(p1 || undefined);
+    };
 
-    console.log(`Final benchesPerColumn:`, benchesPerColumn);
-
-    let serialNumber = 1;
-    let deskOffset = 0;
-
+    // Iterate columns and rows
+    let deskBase = 0;
     for (let col = 0; col < columns; col++) {
-      const rows = benchesPerColumn[col];
+      const rows = perCol[col];
       for (let row = 1; row <= rows; row++) {
-        if (serialNumber > capacity) break;
-        // Determine the two semesters to pair for this branch at this moment
-        const [semA, semB] = getTopTwoSemesters(chosenBranch);
-        if (!semA && !semB) break; // nothing left in this branch
+        if (!hasRemaining() || serial > room.totalCapacity) break;
+        const desk = deskBase + row;
 
-        const s1 = semA ? popFromBranchSemester(chosenBranch, semA) : null;
-        const s2 = semB ? popFromBranchSemester(chosenBranch, semB) : null; // may be null if only one sem remains
+        // Keep the paper pair sticky across benches
+        ensurePair();
+        if (!p1) break; // no students left at all
 
-        const deskNumber = deskOffset + row;
-
+        const s1 = byPaper[p1]?.shift() || null;
         if (s1) {
           assignments.push({
             rollNumber: s1.rollNumber,
             paper: s1.paper,
-            assignment: {
-              roomName: classroom.roomName,
-              deskNumber,
-              side: 'Side 1',
-              serialNumber,
-            },
+            assignment: { roomName: room.roomName, deskNumber: desk, side: 'Side 1', serialNumber: serial },
           });
-          serialNumber++;
+          serial++;
+        }
+        if (serial <= room.totalCapacity && p2) {
+          const s2 = byPaper[p2]?.shift() || null;
+          if (s2) {
+            assignments.push({
+              rollNumber: s2.rollNumber,
+              paper: s2.paper,
+              assignment: { roomName: room.roomName, deskNumber: desk, side: 'Side 2', serialNumber: serial },
+            });
+            serial++;
+          }
         }
 
-        if (s2 && serialNumber <= capacity) {
-          assignments.push({
-            rollNumber: s2.rollNumber,
-            paper: s2.paper,
-            assignment: {
-              roomName: classroom.roomName,
-              deskNumber,
-              side: 'Side 2',
-              serialNumber,
-            },
-          });
-          serialNumber++;
-        }
+        // If either paper queue emptied, reset to choose next pair
+        if (!byPaper[p1]?.length) p1 = null;
+        if (!p2 || !byPaper[p2]?.length) p2 = null;
       }
-      deskOffset += rows;
-
-      // If this branch ran out mid-room and capacity remains, we will continue to next loop iteration
-      // which selects new semesters within the same branch first; only when the branch empties entirely
-      // will we move to next branch on the next classroom.
-    }
-
-    // If the room still has capacity and this branch is empty, the next classroom will pick another branch.
-  }
-
-  // 4) Second pass: place remaining students (any branch) into any room with free seats
-  // Collect leftover students
-  const leftovers: Student[] = [];
-  for (const branch of Object.keys(byBranch)) {
-    for (const sem of Object.keys(byBranch[branch])) {
-      leftovers.push(...byBranch[branch][sem]);
+      deskBase += rows;
     }
   }
 
-  if (leftovers.length > 0) {
-    // Bucket leftovers by paper to keep pairing rule
-    const byPaperLeft: Record<string, Student[]> = {};
-    for (const s of leftovers) {
-      if (!byPaperLeft[s.paper]) byPaperLeft[s.paper] = [];
-      byPaperLeft[s.paper].push(s);
-    }
-    const paperKeysLeft = Object.keys(byPaperLeft);
-    const remainingCountPaper = (p: string) => byPaperLeft[p]?.length || 0;
-    const popFromPaper = (p: string): Student | null => {
-      const arr = byPaperLeft[p];
-      return arr && arr.length > 0 ? arr.shift()! : null;
-    };
-
-    const pickTopPaper = () => paperKeysLeft.filter(p => remainingCountPaper(p) > 0)
-      .sort((a,b) => remainingCountPaper(b) - remainingCountPaper(a) || a.localeCompare(b))[0];
-
-    const pickOtherPaper = (notPaper: string, refStudent?: Student) => {
-      // If we have a reference student with semester, prefer their allowed pair semester
-      if (refStudent) {
-        const wanted = allowedPairFor(refStudent.semesterSection.split('-')[0]);
-        if (wanted) {
-          const candidates = paperKeysLeft.filter(p => {
-            if (p === notPaper) return false;
-            if (remainingCountPaper(p) === 0) return false;
-            // Extract semester from paper key format
-            const matches = byPaperLeft[p]?.some(s => s.semesterSection.split('-')[0] === wanted);
-            return !!matches;
-          });
-          if (candidates.length > 0) {
-            return candidates.sort((a, b) => remainingCountPaper(b) - remainingCountPaper(a))[0];
-          }
-        }
-      }
-      // Fallback: just pick different paper with most students
-      return paperKeysLeft.filter(p => p !== notPaper && remainingCountPaper(p) > 0)
-        .sort((a,b) => remainingCountPaper(b) - remainingCountPaper(a) || a.localeCompare(b))[0];
-    };
-
-    // Helper to compute bench layout and iterate desk numbers in order
-    const benchesFor = (room: Classroom) => {
-      const columns = Math.max(1, room.numberOfColumns);
-      // Use specific desks per column if provided, otherwise calculate evenly
-      return room.desksPerColumn || (() => {
-        const benches = Math.ceil(room.totalCapacity / 2);
-        const basePerCol = Math.floor(benches / columns);
-        const remainder = benches % columns;
-        return Array.from({ length: columns }, (_, i) => basePerCol + (i < remainder ? 1 : 0));
-      })();
-    };
-
-    for (const room of sortedClassrooms) {
-      if (paperKeysLeft.every(p => remainingCountPaper(p) === 0)) break;
-
-      // Current occupancy in room
-      const roomAssignments = assignments.filter(a => a.assignment?.roomName === room.roomName);
-      let serialNumber = roomAssignments.length + 1;
-      if (serialNumber > room.totalCapacity) continue;
-
-      const perCol = benchesFor(room);
-      let deskOffset = 0;
-      for (let col = 0; col < perCol.length; col++) {
-        const rows = perCol[col];
-        for (let row = 1; row <= rows; row++) {
-          if (paperKeysLeft.every(p => remainingCountPaper(p) === 0)) break;
-          if (serialNumber > room.totalCapacity) break;
-          const deskNumber = deskOffset + row;
-          // Determine current occupancy of this desk
-          const existing = roomAssignments.filter(a => a.assignment?.deskNumber === deskNumber);
-          const side1 = existing.find(e => e.assignment?.side === 'Side 1') || null;
-          const side2 = existing.find(e => e.assignment?.side === 'Side 2') || null;
-
-          // If both sides filled, continue
-          if (side1 && side2) continue;
-
-          // If none, place a new pair
-          if (!side1 && !side2) {
-            const top = pickTopPaper();
-            if (!top) break;
-            const s1 = popFromPaper(top);
-            const otherPaper = pickOtherPaper(top, s1 || undefined);
-            const s2 = otherPaper ? popFromPaper(otherPaper) : null;
-
-            if (s1) {
-              assignments.push({
-                rollNumber: s1.rollNumber,
-                paper: s1.paper,
-                assignment: { roomName: room.roomName, deskNumber, side: 'Side 1', serialNumber },
-              });
-              serialNumber++; if (serialNumber > room.totalCapacity) continue;
-            }
-            if (s2) {
-              assignments.push({
-                rollNumber: s2.rollNumber,
-                paper: s2.paper,
-                assignment: { roomName: room.roomName, deskNumber, side: 'Side 2', serialNumber },
-              });
-              serialNumber++;
-            }
-            continue;
-          }
-
-          // If one side occupied, try fill ONLY with a different paper; otherwise leave empty
-          const occupied = side1 || side2;
-          if (!occupied) continue;
-          const occupiedPaper = occupied.paper;
-          // Find the original student from the assignments map
-          const originalStudent = students.find(s => s.rollNumber === occupied.rollNumber);
-          const otherPaper = pickOtherPaper(occupiedPaper, originalStudent);
-          if (otherPaper) {
-            const pick = popFromPaper(otherPaper);
-            if (pick) {
-              const side: 'Side 1' | 'Side 2' = side1 ? 'Side 2' : 'Side 1';
-              assignments.push({
-                rollNumber: pick.rollNumber,
-                paper: pick.paper,
-                assignment: { roomName: room.roomName, deskNumber, side, serialNumber },
-              });
-              serialNumber++;
-            }
-          }
-        }
-        deskOffset += rows;
-      }
-    }
-
-    // Any still left are truly unassigned
-    for (const p of paperKeysLeft) {
-      for (const s of byPaperLeft[p]) unassignedStudents.push(s);
-    }
+  // Gather any remaining students in queues as unassigned
+  const unassignedStudents: Student[] = [];
+  for (const p of paperOrder) {
+    const q = byPaper[p];
+    if (q && q.length) unassignedStudents.push(...q);
   }
-
   return { assignments, unassignedStudents };
 }

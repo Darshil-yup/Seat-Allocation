@@ -21,7 +21,7 @@ const prepareFlowInput = (classrooms: Classroom[], students: Student[]): Intelli
     numberOfColumns: c.numberOfColumns,
     desksPerColumn: c.desksPerColumn,
   }));
-  
+
   const flowStudents = students.map(s => ({
     rollNumber: s.rollNumber,
     paper: s.paper,
@@ -65,6 +65,7 @@ export default function Home() {
   const [isLoading, setIsLoading] = useState(false);
   const [disableAutoAllocate, setDisableAutoAllocate] = useState(false);
   const { toast } = useToast();
+
 
   const runAllocation = useCallback(async () => {
     if (disableAutoAllocate) {

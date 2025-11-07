@@ -7,6 +7,7 @@ type PrintReportsProps = {
   printDate: string;
   semester: "ODD" | "EVEN";
   examType: "MSE1" | "MSE 2" | "Re-MSE";
+  shift: string;
 };
 
 export const PrintReports = ({
@@ -14,6 +15,7 @@ export const PrintReports = ({
   printDate,
   semester,
   examType,
+  shift,
 }: PrintReportsProps) => {
   const currentYear = new Date().getFullYear();
   const nextYear = (currentYear + 1).toString().slice(-2);
@@ -33,12 +35,21 @@ export const PrintReports = ({
             body {
               -webkit-print-color-adjust: exact;
               print-color-adjust: exact;
+              background: #fff !important;
+              color: #000 !important;
             }
             .page-break {
               page-break-before: always;
             }
             .no-print {
               display: none;
+            }
+            .bg-white {
+              background-color: #fff !important;
+              print-color-adjust: exact;
+            }
+            .border {
+              border-color: #000 !important;
             }
           }
           .font-college {
@@ -80,7 +91,7 @@ export const PrintReports = ({
                 Department of Computer Technology
               </h2>
               <h3 className="text-lg font-medium mt-2">
-                Seating Arrangement for {examType} - {semester} {academicYear}
+                Seating Arrangement for {examType} - {semester} {academicYear} ({shift})
               </h3>
             </div>
 
@@ -98,25 +109,48 @@ export const PrintReports = ({
                       </th>
                     </tr>
                     <tr>
-                      <th className="p-2">Subject (Branch-Sem)</th>
+                      <th className="p-2">Subject</th>
                       <th className="p-2" colSpan={2}>
-                        Roll No.
+                        Branch-Semester & Roll No.
                       </th>
                       <th className="p-2">Total</th>
                     </tr>
                     <tr>
                       <th className="p-2"></th>
-                      <th className="p-2 font-medium">From</th>
-                      <th className="p-2 font-medium">To</th>
+                      <th className="p-2 font-medium">Branch-Sem</th>
+                      <th className="p-2 font-medium">Roll Number</th>
                       <th className="p-2"></th>
                     </tr>
                   </thead>
                   <tbody>
                     {report.summary.map((s, idx) => (
                       <tr key={idx}>
-                        <td className="p-2 text-center">{s.paper}</td>
-                        <td className="p-2 text-center">{s.from}</td>
-                        <td className="p-2 text-center">{s.to}</td>
+                        <td className="p-2 text-center">
+                          {/* Extract subject name from format "Subject (Branch - Sem)" */}
+                          {(() => {
+                            const match = s.paper.match(/^([^(]+)/);
+                            return match ? match[1].trim() : s.paper;
+                          })()}
+                        </td>
+                        <td className="p-2 text-center">
+                          {/* Extract branch-semester from "Subject (Branch - Sem)" */}
+                          {(() => {
+                            const match = s.paper.match(/\((.*)\)/);
+                            return match ? match[1] : '';
+                          })()}
+                        </td>
+                        <td className="p-2 text-center">
+                          {(() => {
+                            // Extract just the roll suffix from the full roll number
+                            const extractRollSuffix = (roll: string) => {
+                              const parts = roll.split('-');
+                              return parts[parts.length - 1];
+                            };
+                            const fromSuffix = extractRollSuffix(s.from);
+                            const toSuffix = extractRollSuffix(s.to);
+                            return `${fromSuffix} to ${toSuffix}`;
+                          })()}
+                        </td>
                         <td className="p-2 text-center">{s.total}</td>
                       </tr>
                     ))}
@@ -134,8 +168,7 @@ export const PrintReports = ({
               <div className="w-1/4"></div>
             </div>
 
-            {/* Seating Columns Section */}
-            {/* Extract unique branch-semester combinations for this classroom */}
+            {/* Branch-Semester Groups - positioned between summary table and seating columns */}
             {(() => {
               const branchSemSet = new Set<string>();
               report.columns.forEach(col => {
@@ -146,16 +179,15 @@ export const PrintReports = ({
                 });
               });
               const branchSemList = Array.from(branchSemSet).sort();
-              return (
-                <div>
-                  {branchSemList.length > 0 && (
-                    <div className="mb-4 p-2 bg-gray-100 rounded">
-                      <p className="text-sm font-semibold">Branch-Semester Groups:</p>
-                      <p className="text-xs">{branchSemList.join(' | ')}</p>
-                    </div>
-                  )}
-                </div>
-              );
+              if (branchSemList.length > 0) {
+                return (
+                  <div className="mb-6 mt-4 p-3 border-2 border-gray-300 rounded-lg bg-gray-50">
+                    <p className="text-base font-bold text-center mb-2">Branch-Semester Groups in This Classroom:</p>
+                    <p className="text-sm text-center">{branchSemList.join(' | ')}</p>
+                  </div>
+                );
+              }
+              return null;
             })()}
             <div className={`grid grid-cols-${report.classroom.numberOfColumns} gap-x-4`}>
               {Array.from({ length: report.classroom.numberOfColumns }).map((_, colIndex) => {
